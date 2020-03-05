@@ -240,10 +240,10 @@ public:
         {
             return instruction->memoryEnd;
         }
-        else if (instruction->type == SW && instruction->issue != -1)
-        {
-            return instruction->issue;
-        }
+        // else if (instruction->type == SW && instruction->issue != -1)
+        // {
+        //     return instruction->issue;
+        // }
         return instruction->execEnd;
     }
 
@@ -320,6 +320,7 @@ class ReservationStationTable
     int addUnits, multUnits, branchUnits, memoryUnits;
     bool isMemBusy, isMemExecBusy, isAdderBusy, isMultBusy, isBranchBusy;
     int memoryCycle, adderCycle, multCycle, branchCycle;
+    deque<int> branchInstrStallQueue;
 
 public:
     ReservationStationTable()
@@ -372,7 +373,7 @@ public:
 
         // clear write backs
         auto it = availableToWriteBack.begin();
-        for (int i = topK; i > 0 && it != availableToWriteBack.end(); i--)
+        for (int i = topK; i > 0 && it != availableToWriteBack.end(); i--, it++)
         {
             //EX : ADD1
             string clearDependency = ReservationStationTypeString[it->second.first];
@@ -380,7 +381,7 @@ public:
             //clear entry in table.
             if (it->second.first == ADDDER)
             {
-                isAdderBusy = false;
+                //isAdderBusy = false;
                 clearDependency += to_string(add[it->second.second - 1]->getInstruction()->id);
                 add[it->second.second - 1]
                     ->setWriteBackTiming(cycleTime);
@@ -388,14 +389,14 @@ public:
             }
             else if (it->second.first == MULTDIV)
             {
-                isMultBusy = false;
+                //isMultBusy = false;
                 clearDependency += to_string(mult[it->second.second - 1]->getInstruction()->id);
                 mult[it->second.second - 1]->setWriteBackTiming(cycleTime);
                 mult.erase(mult.begin() + it->second.second - 1);
             }
             else if (it->second.first == MEMORY)
             {
-                isMemBusy = false;
+                //isMemBusy = false;
                 clearDependency += to_string(memory[it->second.second - 1]->getInstruction()->id);
                 memory[it->second.second - 1]->setWriteBackTiming(cycleTime);
                 memory.erase(memory.begin() + (it->second.second - 1));
@@ -432,14 +433,34 @@ public:
 
     void execMemory(int cycleTime)
     {
-        for (auto it : memory)
+        vector<ReservationStation *>::iterator it = memory.begin();
+        while (it != memory.end())
         {
-            if (!isMemBusy && it->isInMemoryStage() && !it->hasDependency() && it->getExecOrMemEndTime() != -1 && it->getExecOrMemEndTime() < cycleTime)
+            int timing;
+            if ((*it)->getInstructionType() == LW)
+            {
+                timing = (*it)->getExecOrMemEndTime();
+            }
+            else
+            {
+                timing = (*it)->getIssueEndTime();
+            }
+
+            if (!isMemBusy && (*it)->isInMemoryStage() && !(*it)->hasDependency() && timing != -1 && timing < cycleTime)
             {
                 isMemBusy = true;
-                it->setMemoryTiming(cycleTime, cycleTime + memoryCycle - 1);
+                (*it)->setMemoryTiming(cycleTime, cycleTime + memoryCycle - 1);
+
+                if ((*it)->getInstructionType() == SW)
+                {
+                    (*it)->setStage(FINISHED);
+                    memory.erase(it);
+                }
+
                 break;
             }
+
+            it++;
         }
     }
 
@@ -584,6 +605,8 @@ public:
             {
                 br->setqk(rf[instr->src2].dataValue);
             }
+
+            branchInstrStallQueue.push_back(instr->issue);
         }
     }
 
@@ -591,14 +614,22 @@ public:
     {
 
         //5. Branch case
-        for (auto it : branch)
+        vector<ReservationStation *>::iterator it = branch.begin();
+        while (it != branch.end())
         {
-            if (it->isInExecStage() && it->getExecOrMemEndTime() != -1 && it->getExecOrMemEndTime() <= cycleTime && isBranchBusy)
+            if ((*it)->isInExecStage() && (*it)->getExecOrMemEndTime() != -1 && (*it)->getExecOrMemEndTime() <= cycleTime && isBranchBusy)
             {
                 isBranchBusy = false;
-                it->setStage(FINISHED);
+                (*it)->setStage(FINISHED);
+
+                // remove stall
+                branchInstrStallQueue.pop_front();
+
+                //remove branch instr from queue
+                branch.erase(it);
                 break;
             }
+            it++;
         }
 
         //4. Exec to WriteBack
@@ -636,12 +667,12 @@ public:
     {
         for (auto it : resrv)
         {
-            if (it->getInstructionType() != SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
+            if (((!branchInstrStallQueue.empty() && it->getIssueEndTime() <= branchInstrStallQueue.front()) || (branchInstrStallQueue.empty())) && it->getInstructionType() != SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
             {
                 it->setStage(EXEC);
             }
 
-            if (it->getInstructionType() == SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
+            if (((!branchInstrStallQueue.empty() && it->getIssueEndTime() <= branchInstrStallQueue.front()) || (branchInstrStallQueue.empty())) && it->getInstructionType() == SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
             {
                 it->setStage(MEM);
             }
@@ -655,6 +686,10 @@ public:
             if (it->isInExecStage() && it->getExecOrMemEndTime() != -1 && it->getExecOrMemEndTime() <= cycleTime)
             {
                 it->setStage(WRITEBACK);
+                if (it->getInstructionType() == ADD || it->getInstructionType() == SUB)
+                    isAdderBusy = false;
+                if (it->getInstructionType() == MULT || it->getInstructionType() == DIV)
+                    isMultBusy = false;
             }
         }
     }
@@ -664,7 +699,7 @@ class TomsuloSimulator
 {
     vector<Instruction *> instructions;
     ReservationStationTable *reservationTable;
-    int timer;
+    int issueCount, commitCount;
 
 public:
     TomsuloSimulator()
@@ -672,17 +707,29 @@ public:
         reservationTable = NULL;
     }
 
-    TomsuloSimulator(vector<Instruction *> instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle)
+    TomsuloSimulator(vector<Instruction *> instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, int issueCount, int commitCount)
     {
         instructions = instr;
         reservationTable = new ReservationStationTable(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle);
+        this->issueCount = issueCount;
+        this->commitCount = commitCount;
     }
 
     void printTimingCycle()
     {
         for (auto it : instructions)
         {
-            cout << (it)->issue << "\t" << it->execStart << "-" << it->execEnd << "\t";
+            cout << (it)->issue << "\t";
+
+            if (it->execStart != -1 && it->execEnd != -1)
+            {
+                cout << it->execStart << "-" << it->execEnd << "\t";
+            }
+            else
+            {
+                cout << "\t";
+            }
+
             if (it->memoryStart != -1 && it->memoryEnd != -1)
             {
                 cout << it->memoryStart << "-" << it->memoryEnd << "\t";
@@ -703,30 +750,29 @@ public:
 void TomsuloSimulator::execute()
 {
     int time = 1;
-    // while (true)
-    // {
-    //     // writeback to registerfile
-    //     clearWriteBack();
-    //     //memory
-
-    //     //search res table to find instruction ready to execute (note: time of issue and exec cann't be same)
-    //     // issue intructions
-    // }
     auto it = instructions.begin();
     do
     {
-        if (it != instructions.end())
+        int i = 0;
+        while ((i < issueCount) && (it != instructions.end()))
         {
             bool canIssue = reservationTable->canIssue((*it)->type);
             if (canIssue)
             {
                 reservationTable->issue(*it, time);
+                if ((*it)->type == BNE)
+                {
+                    it++;
+                    break;
+                }
                 it++;
             }
+
+            i++;
         }
         reservationTable->execute(time);
         reservationTable->execMemory(time);
-        reservationTable->writeBack(time, 1);
+        reservationTable->writeBack(time, commitCount);
         reservationTable->advanceStage(time);
         time++;
     } while (!reservationTable->isEmpty());
@@ -735,14 +781,29 @@ void TomsuloSimulator::execute()
 int main()
 {
     vector<Instruction *> instrArray;
-    Instruction *instr = new Instruction("LW r6 r2", 0);
-    instrArray.push_back(instr);
-    instrArray.push_back(new Instruction("LW r2 r3", 1));
-    instrArray.push_back(new Instruction("MULT r0 r2 r4", 2));
-    instrArray.push_back(new Instruction("SUB r8 r6 r2", 3));
-    instrArray.push_back(new Instruction("DIV r9 r0 r6", 4));
-    instrArray.push_back(new Instruction("ADD r6 r8 r2", 5));
-    TomsuloSimulator tm(instrArray, 3, 3, 2, 3, 1, 2, 10, 1);
+    // TC1
+    // Instruction *instr = new Instruction("LW r6 r2", 0);
+    // instrArray.push_back(instr);
+    // instrArray.push_back(new Instruction("LW r2 r3", 1));
+    // instrArray.push_back(new Instruction("MULT r0 r2 r4", 2));
+    // instrArray.push_back(new Instruction("SUB r8 r6 r2", 3));
+    // instrArray.push_back(new Instruction("DIV r9 r0 r6", 4));
+    // instrArray.push_back(new Instruction("ADD r6 r8 r2", 5));
+
+    //TC2
+    instrArray.push_back(new Instruction("LW r2 r1", 0));
+    instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
+    instrArray.push_back(new Instruction("SW r2 r1", 2));
+    instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
+    instrArray.push_back(new Instruction("BNE r2 r3", 4));
+    instrArray.push_back(new Instruction("LW r2 r1", 5));
+    instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
+    instrArray.push_back(new Instruction("SW r2 r1", 7));
+    instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
+    instrArray.push_back(new Instruction("BNE r2 r3", 9));
+
+    //TomsuloSimulator tm(instrArray, 3, 3, 2, 3, 1, 2, 10, 1, 2, 2);
+    TomsuloSimulator tm(instrArray, 3, 2, 2, 5, 1, 1, 2, 1, 2, 2);
     tm.execute();
     tm.printTimingCycle();
 }
