@@ -314,7 +314,7 @@ public:
     }
 };
 
-class ReservationStationTable
+class NonSpeculativeTomasulo
 {
 protected:
     vector<ReservationStation *> add, mult, branch, memory;
@@ -325,13 +325,13 @@ protected:
     bool isBranchTaken, isBranchEncountered;
 
 public:
-    ReservationStationTable()
+    NonSpeculativeTomasulo()
     {
         isMemBusy = isMemExecBusy = isAdderBusy = isMultBusy = isBranchBusy = false;
         memoryCycle = adderCycle = multCycle = branchCycle = -1;
     }
 
-    ReservationStationTable(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, bool isBranchTaken)
+    NonSpeculativeTomasulo(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, bool isBranchTaken)
     {
         this->addUnits = addUnits;
         this->multUnits = multUnits;
@@ -379,6 +379,7 @@ public:
         auto it = availableToWriteBack.begin();
         for (int i = topK; i > 0 && it != availableToWriteBack.end(); i--, it++)
         {
+            // make it finished
             //EX : ADD1
             string clearDependency = ReservationStationTypeString[it->second.first];
 
@@ -389,6 +390,8 @@ public:
                 clearDependency += to_string(add[it->second.second - 1]->getInstruction()->id);
                 add[it->second.second - 1]
                     ->setWriteBackTiming(cycleTime);
+                add[it->second.second - 1]
+                    ->setStage(FINISHED);
                 add.erase(add.begin() + it->second.second - 1);
             }
             else if (it->second.first == MULTDIV)
@@ -396,6 +399,7 @@ public:
                 //isMultBusy = false;
                 clearDependency += to_string(mult[it->second.second - 1]->getInstruction()->id);
                 mult[it->second.second - 1]->setWriteBackTiming(cycleTime);
+                mult[it->second.second - 1]->setStage(FINISHED);
                 mult.erase(mult.begin() + it->second.second - 1);
             }
             else if (it->second.first == MEMORY)
@@ -403,6 +407,7 @@ public:
                 //isMemBusy = false;
                 clearDependency += to_string(memory[it->second.second - 1]->getInstruction()->id);
                 memory[it->second.second - 1]->setWriteBackTiming(cycleTime);
+                memory[it->second.second - 1]->setStage(FINISHED);
                 memory.erase(memory.begin() + (it->second.second - 1));
             }
 
@@ -710,7 +715,7 @@ public:
 class TomsuloSimulator
 {
     vector<Instruction *> *instructions;
-    ReservationStationTable *reservationTable;
+    NonSpeculativeTomasulo *reservationTable;
     int issueCount, commitCount;
 
 public:
@@ -722,7 +727,7 @@ public:
     TomsuloSimulator(vector<Instruction *> *instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, int issueCount, int commitCount, bool isBranchTaken)
     {
         instructions = instr;
-        reservationTable = new ReservationStationTable(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, isBranchTaken);
+        reservationTable = new NonSpeculativeTomasulo(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, isBranchTaken);
         this->issueCount = issueCount;
         this->commitCount = commitCount;
     }
@@ -731,6 +736,9 @@ public:
     {
         for (auto it : *instructions)
         {
+            if (it->getStage() != FINISHED)
+                continue;
+
             if (it->issue == -1)
                 continue;
 
