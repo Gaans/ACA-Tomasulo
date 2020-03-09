@@ -3,7 +3,7 @@
 #include <deque>
 #include <sstream>
 #include <map>
-
+#include <fstream>
 using namespace std;
 
 enum InstructionType
@@ -172,7 +172,7 @@ void Register::clearDependencyValues(string dependentValue)
     }
 }
 
-Register rf[10];
+Register rf[15];
 
 class ReservationStation
 {
@@ -316,11 +316,13 @@ public:
 
 class ReservationStationTable
 {
+protected:
     vector<ReservationStation *> add, mult, branch, memory;
     int addUnits, multUnits, branchUnits, memoryUnits;
     bool isMemBusy, isMemExecBusy, isAdderBusy, isMultBusy, isBranchBusy;
     int memoryCycle, adderCycle, multCycle, branchCycle;
     deque<int> branchInstrStallQueue;
+    bool isBranchTaken, isBranchEncountered;
 
 public:
     ReservationStationTable()
@@ -329,7 +331,7 @@ public:
         memoryCycle = adderCycle = multCycle = branchCycle = -1;
     }
 
-    ReservationStationTable(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle)
+    ReservationStationTable(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, bool isBranchTaken)
     {
         this->addUnits = addUnits;
         this->multUnits = multUnits;
@@ -340,6 +342,8 @@ public:
         this->multCycle = multCycle;
         this->branchCycle = branchCycle;
         isMemBusy = isMemExecBusy = isAdderBusy = isMultBusy = isBranchBusy = false;
+        this->isBranchTaken = isBranchTaken;
+        isBranchEncountered = false;
     }
 
     bool isEmpty()
@@ -455,6 +459,7 @@ public:
                 {
                     (*it)->setStage(FINISHED);
                     memory.erase(it);
+                    isMemBusy = false;
                 }
 
                 break;
@@ -513,6 +518,12 @@ public:
 
     bool canIssue(InstructionType instructionType)
     {
+        if ((isBranchEncountered) && (!isBranchTaken))
+        {
+            // if branch is not taken, don't issue any instruction after branch
+            return false;
+        }
+
         if (instructionType == LW || instructionType == SW)
         {
             return memory.size() < memoryUnits;
@@ -527,6 +538,7 @@ public:
         }
         else if (instructionType == BNE)
         {
+            isBranchEncountered = true;
             return branch.size() < branchUnits;
         }
     }
@@ -697,7 +709,7 @@ public:
 
 class TomsuloSimulator
 {
-    vector<Instruction *> instructions;
+    vector<Instruction *> *instructions;
     ReservationStationTable *reservationTable;
     int issueCount, commitCount;
 
@@ -707,18 +719,21 @@ public:
         reservationTable = NULL;
     }
 
-    TomsuloSimulator(vector<Instruction *> instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, int issueCount, int commitCount)
+    TomsuloSimulator(vector<Instruction *> *instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, int issueCount, int commitCount, bool isBranchTaken)
     {
         instructions = instr;
-        reservationTable = new ReservationStationTable(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle);
+        reservationTable = new ReservationStationTable(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, isBranchTaken);
         this->issueCount = issueCount;
         this->commitCount = commitCount;
     }
 
     void printTimingCycle()
     {
-        for (auto it : instructions)
+        for (auto it : *instructions)
         {
+            if (it->issue == -1)
+                continue;
+
             cout << (it)->issue << "\t";
 
             if (it->execStart != -1 && it->execEnd != -1)
@@ -750,11 +765,11 @@ public:
 void TomsuloSimulator::execute()
 {
     int time = 1;
-    auto it = instructions.begin();
+    auto it = instructions->begin();
     do
     {
         int i = 0;
-        while ((i < issueCount) && (it != instructions.end()))
+        while ((i < issueCount) && (it != instructions->end()))
         {
             bool canIssue = reservationTable->canIssue((*it)->type);
             if (canIssue)
@@ -778,9 +793,42 @@ void TomsuloSimulator::execute()
     } while (!reservationTable->isEmpty());
 }
 
-int main()
+vector<Instruction *> *readFile(string fileName)
 {
-    vector<Instruction *> instrArray;
+    string sLine = "";
+    Instruction *newInstruction;
+    ifstream infile;
+
+    vector<Instruction *> *instructions = new vector<Instruction *>();
+
+    infile.open(fileName.c_str(), std::ifstream::in);
+
+    if (!infile)
+    {
+        std::cout << "Failed to open file " << fileName << std::endl;
+        return instructions;
+    }
+    int instructionCount = 0;
+    while (!infile.eof())
+    {
+        getline(infile, sLine);
+        if (sLine.empty())
+            break;
+        newInstruction = new Instruction(sLine, instructionCount);
+        instructions->push_back(newInstruction);
+        instructionCount++;
+    }
+
+    infile.close();
+    cout << "Read file completed!!" << endl;
+
+    return instructions;
+}
+
+int main(int argc, char *argv[])
+{
+    vector<Instruction *> *instrArray;
+
     // TC1
     // Instruction *instr = new Instruction("LW r6 r2", 0);
     // instrArray.push_back(instr);
@@ -791,19 +839,41 @@ int main()
     // instrArray.push_back(new Instruction("ADD r6 r8 r2", 5));
 
     //TC2
-    instrArray.push_back(new Instruction("LW r2 r1", 0));
-    instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
-    instrArray.push_back(new Instruction("SW r2 r1", 2));
-    instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
-    instrArray.push_back(new Instruction("BNE r2 r3", 4));
-    instrArray.push_back(new Instruction("LW r2 r1", 5));
-    instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
-    instrArray.push_back(new Instruction("SW r2 r1", 7));
-    instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
-    instrArray.push_back(new Instruction("BNE r2 r3", 9));
+    // instrArray.push_back(new Instruction("LW r2 r1", 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
+    // instrArray.push_back(new Instruction("SW r2 r1", 2));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 4));
+    // instrArray.push_back(new Instruction("LW r2 r1", 5));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
+    // instrArray.push_back(new Instruction("SW r2 r1", 7));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 9));
 
     //TomsuloSimulator tm(instrArray, 3, 3, 2, 3, 1, 2, 10, 1, 2, 2);
-    TomsuloSimulator tm(instrArray, 3, 2, 2, 5, 1, 1, 2, 1, 2, 2);
+
+    if (argc <= 1)
+    {
+        return -1;
+    }
+    string defaultBranchTaken("true");
+    string fileName(argv[1]);
+    instrArray = readFile(fileName);
+
+    int noAddUnits = stoi(argv[2]);
+    int noMultUnits = stoi(argv[3]);
+    int noBranchUnits = stoi(argv[4]);
+    int noMemoryUnits = stoi(argv[5]);
+    int memoryCycle = stoi(argv[6]);
+    int adderCycle = stoi(argv[7]);
+    int multCycle = stoi(argv[8]);
+    int branchCycle = stoi(argv[9]);
+    int issueCount = stoi(argv[10]);
+    int commitCount = stoi(argv[11]);
+    bool isBranchTaken = (defaultBranchTaken.compare(argv[12]) == 0);
+
+    // TomsuloSimulator tm(instrArray, 3, 2, 2, 5, 1, 1, 2, 1, 2, 2,false);
+    TomsuloSimulator tm(instrArray, noAddUnits, noMultUnits, noBranchUnits, noMemoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, issueCount, commitCount, isBranchTaken);
     tm.execute();
     tm.printTimingCycle();
 }
