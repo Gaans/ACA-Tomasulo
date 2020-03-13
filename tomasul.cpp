@@ -354,7 +354,7 @@ public:
         branchIdExit = -1;
     }
 
-    ReservationStationTable(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, bool isBranchTaken)
+    ReservationStationTable(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, bool isBranchTaken, bool isSpeculative)
     {
         this->addUnits = addUnits;
         this->multUnits = multUnits;
@@ -367,7 +367,7 @@ public:
         isMemBusy = isMemExecBusy = isAdderBusy = isMultBusy = isBranchBusy = false;
         this->isBranchTaken = isBranchTaken;
         isBranchEncountered = false;
-        isSpeculative = true;
+        this->isSpeculative = isSpeculative;
         ROBHead = 0;
         speculativeShouldExitOnBranch = false;
         branchIdExit = -1;
@@ -847,7 +847,7 @@ public:
         }
     }
 
-    void speculativeClear(vector<ReservationStation *> resrv)
+    void speculativeClear(vector<ReservationStation *> &resrv)
     {
         vector<ReservationStation *>::iterator it = resrv.begin();
 
@@ -858,13 +858,17 @@ public:
                 (*it)->setStage(NOTISSUED);
                 resrv.erase(it);
             }
+            else
+            {
+                it++;
+            }
         }
     }
 };
 
 class TomsuloSimulator
 {
-    vector<Instruction *> instructions;
+    vector<Instruction *> *instructions;
     ReservationStationTable *reservationTable;
     int issueCount, commitCount;
 
@@ -874,17 +878,26 @@ public:
         reservationTable = NULL;
     }
 
-    TomsuloSimulator(vector<Instruction *> instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, int issueCount, int commitCount, bool isBranchTaken)
+    TomsuloSimulator(vector<Instruction *> *instr, int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, int issueCount, int commitCount, bool isBranchTaken, bool isSpeculative)
     {
         instructions = instr;
-        reservationTable = new ReservationStationTable(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, isBranchTaken);
+        reservationTable = new ReservationStationTable(addUnits, multUnits, branchUnits, memoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, isBranchTaken, isSpeculative);
         this->issueCount = issueCount;
         this->commitCount = commitCount;
     }
 
     void printTimingCycle()
     {
-        for (auto it : instructions)
+        cout << "Issue"
+             << "\t"
+             << "Exec"
+             << "\t"
+             << "Mem"
+             << "\t"
+             << "WrtCDB"
+             << "\t"
+             << "Commit" << endl;
+        for (auto it : (*instructions))
         {
             if (it->getStage() != FINISHED)
                 continue;
@@ -931,11 +944,11 @@ public:
 void TomsuloSimulator::execute()
 {
     int time = 1;
-    auto it = instructions.begin();
+    auto it = (*instructions).begin();
     do
     {
         int i = 0;
-        while ((i < issueCount) && (it != instructions.end()))
+        while ((i < issueCount) && (it != (*instructions).end()))
         {
             bool canIssue = reservationTable->canIssue((*it)->type);
             if (canIssue)
@@ -995,7 +1008,7 @@ vector<Instruction *> *readFile(string fileName)
 
 int main(int argc, char *argv[])
 {
-    vector<Instruction *> instrArray;
+    vector<Instruction *> *instrArray;
 
     // TC1
     // Instruction *instr = new Instruction("LW r6 r2", 0);
@@ -1007,16 +1020,16 @@ int main(int argc, char *argv[])
     // instrArray.push_back(new Instruction("ADD r6 r8 r2", 5));
 
     //TC2
-    instrArray.push_back(new Instruction("LW r2 r1", 0));
-    instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
-    instrArray.push_back(new Instruction("SW r2 r1", 2));
-    instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
-    instrArray.push_back(new Instruction("BNE r2 r3", 4));
-    instrArray.push_back(new Instruction("LW r2 r1", 5));
-    instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
-    instrArray.push_back(new Instruction("SW r2 r1", 7));
-    instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
-    instrArray.push_back(new Instruction("BNE r2 r3", 9));
+    // instrArray.push_back(new Instruction("LW r2 r1", 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
+    // instrArray.push_back(new Instruction("SW r2 r1", 2));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 4));
+    // instrArray.push_back(new Instruction("LW r2 r1", 5));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
+    // instrArray.push_back(new Instruction("SW r2 r1", 7));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 9));
 
     //TomsuloSimulator tm(instrArray, 3, 3, 2, 3, 1, 2, 10, 1, 2, 2);
 
@@ -1024,9 +1037,9 @@ int main(int argc, char *argv[])
     {
         return -1;
     }
-    string defaultBranchTaken("true");
+    string trueString("true");
     string fileName(argv[1]);
-    // instrArray = readFile(fileName);
+    instrArray = readFile(fileName);
 
     int noAddUnits = stoi(argv[2]);
     int noMultUnits = stoi(argv[3]);
@@ -1038,10 +1051,11 @@ int main(int argc, char *argv[])
     int branchCycle = stoi(argv[9]);
     int issueCount = stoi(argv[10]);
     int commitCount = stoi(argv[11]);
-    bool isBranchTaken = (defaultBranchTaken.compare(argv[12]) == 0);
+    bool isBranchTaken = (trueString.compare(argv[12]) == 0);
+    bool isSpeculative = (trueString.compare(argv[13]) == 0);
 
     // TomsuloSimulator tm(instrArray, 3, 2, 2, 5, 1, 1, 2, 1, 2, 2,false);
-    TomsuloSimulator tm(instrArray, noAddUnits, noMultUnits, noBranchUnits, noMemoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, issueCount, commitCount, isBranchTaken);
+    TomsuloSimulator tm(instrArray, noAddUnits, noMultUnits, noBranchUnits, noMemoryUnits, memoryCycle, adderCycle, multCycle, branchCycle, issueCount, commitCount, isBranchTaken, isSpeculative);
     tm.execute();
     tm.printTimingCycle();
 }
