@@ -42,7 +42,7 @@ class Instruction
 {
 public:
     Instruction();
-    Instruction(string, int);
+    Instruction(string, int, int);
     int getId()
     {
         return id;
@@ -51,12 +51,18 @@ public:
     {
         return stage;
     }
-
+    int getLoopId()
+    {
+        return loopId;
+    }
     InstructionType type; // Type of instruction
     int dest;             // Destination register number
     int src1;             // Source register number
     int src2;             // Source register number
-    void printInstruction();
+    string printInstruction()
+    {
+        return instructionString;
+    }
     int issue;
     int execStart;
     int execEnd;
@@ -65,6 +71,8 @@ public:
     int writeCDB;
     int commit;
     int id;
+    int loopId;
+    string instructionString;
     Stage stage;
 };
 
@@ -86,9 +94,11 @@ Instruction::Instruction(void)
     stage = NOTISSUED;
 }
 
-Instruction::Instruction(string newInst, int id)
+Instruction::Instruction(string newInst, int id, int loopId)
 {
     this->id = id;
+    this->loopId = loopId;
+    instructionString = newInst;
     string buf;
     stringstream ss(newInst);
     vector<string> tokens;
@@ -300,6 +310,18 @@ public:
         }
     }
 
+    void clearDependencyWithInstrId(string instrId)
+    {
+        if (qj.find(instrId) != string::npos)
+        {
+            qj = "";
+        }
+        else if (qk.find(instrId) != string::npos)
+        {
+            qk = "";
+        }
+    }
+
     void setMemoryTiming(int startTime, int endTime)
     {
         instruction->memoryStart = startTime;
@@ -331,6 +353,12 @@ struct compare
     }
 };
 
+struct branchStall
+{
+    int branchId;
+    int loopId;
+};
+
 class ReservationStationTable
 {
 protected:
@@ -338,10 +366,10 @@ protected:
     int addUnits, multUnits, branchUnits, memoryUnits;
     bool isMemBusy, isMemExecBusy, isAdderBusy, isMultBusy, isBranchBusy;
     int memoryCycle, adderCycle, multCycle, branchCycle;
-    deque<int> branchInstrStallQueue;
+    deque<branchStall> branchInstrStallQueue;
     bool isBranchTaken, isBranchEncountered;
-    bool isSpeculative, speculativeShouldExitOnBranch;
-    int ROBHead, branchIdExit;
+    bool isSpeculative, shouldExitOnBranch;
+    int ROBHead, branchIdExit, loopIdexit, pc;
     priority_queue<Instruction *, vector<Instruction *>, compare> ROB;
 
 public:
@@ -350,8 +378,9 @@ public:
         isMemBusy = isMemExecBusy = isAdderBusy = isMultBusy = isBranchBusy = false;
         memoryCycle = adderCycle = multCycle = branchCycle = -1;
         ROBHead = 0;
-        speculativeShouldExitOnBranch = false;
+        shouldExitOnBranch = false;
         branchIdExit = -1;
+        loopIdexit = -1;
     }
 
     ReservationStationTable(int addUnits, int multUnits, int branchUnits, int memoryUnits, int memoryCycle, int adderCycle, int multCycle, int branchCycle, bool isBranchTaken, bool isSpeculative)
@@ -369,8 +398,19 @@ public:
         isBranchEncountered = false;
         this->isSpeculative = isSpeculative;
         ROBHead = 0;
-        speculativeShouldExitOnBranch = false;
+        shouldExitOnBranch = false;
         branchIdExit = -1;
+        loopIdexit = -1;
+    }
+
+    void setPC(int head)
+    {
+        pc = head;
+    }
+
+    int getNextLoop()
+    {
+        return loopIdexit + 1;
     }
 
     bool isEmpty()
@@ -382,6 +422,11 @@ public:
     {
         for (int i = topK; i > 0; i--)
         {
+            if (!ROB.empty() && ROB.top()->getId() > branchIdExit && branchIdExit != -1)
+            {
+                ROBHead = pc;
+            }
+
             if (!ROB.empty() && ROB.top()->getId() != ROBHead)
             {
                 //in order commit
@@ -496,9 +541,20 @@ public:
 
     void clearRegister(string reservationNumber)
     {
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 15; i++)
         {
             rf[i].clearDependencyValues(reservationNumber);
+        }
+    }
+
+    void clearRegisterWithInstruction(string instrucionId)
+    {
+        for (int i = 0; i < 15; i++)
+        {
+            if (rf[i].dataValue.find(instrucionId) != string::npos)
+            {
+                rf[i].dataValue = "";
+            }
         }
     }
 
@@ -593,16 +649,16 @@ public:
 
     bool canIssue(InstructionType instructionType)
     {
-        if ((!isSpeculative) && ((isBranchEncountered) && (!isBranchTaken)))
-        {
-            // if branch is not taken, don't issue any instruction after branch
-            return false;
-        }
+        // if ((!isSpeculative) && ((isBranchEncountered) && (!isBranchTaken)))
+        // {
+        //     // if branch is not taken, don't issue any instruction after branch
+        //     return false;
+        // }
 
-        if (isSpeculative && speculativeShouldExitOnBranch)
-        {
-            return false;
-        }
+        // if (isSpeculative && shouldExitOnBranch)
+        // {
+        //     return false;
+        // }
 
         if (instructionType == LW || instructionType == SW)
         {
@@ -618,7 +674,7 @@ public:
         }
         else if (instructionType == BNE)
         {
-            isBranchEncountered = true;
+            // isBranchEncountered = true;
             return branch.size() < branchUnits;
         }
     }
@@ -700,7 +756,10 @@ public:
 
             if (!isSpeculative)
             {
-                branchInstrStallQueue.push_back(instr->issue);
+                branchStall brnch;
+                brnch.branchId = instr->issue;
+                brnch.loopId = instr->loopId;
+                branchInstrStallQueue.push_back(brnch);
             }
         }
     }
@@ -728,6 +787,13 @@ public:
                     branchInstrStallQueue.pop_front();
                 }
 
+                if (!isSpeculative && !isBranchTaken)
+                {
+                    branchIdExit = (*it)->getInstruction()->getId();
+                    loopIdexit = (*it)->getInstruction()->getLoopId();
+                    shouldExitOnBranch = true;
+                }
+
                 if (isSpeculative && isBranchTaken)
                 {
                     (*it)->setStage(COMMIT);
@@ -738,7 +804,8 @@ public:
                     (*it)->setStage(COMMIT);
                     ROB.push((*it)->getInstruction());
                     branchIdExit = (*it)->getInstruction()->getId();
-                    speculativeShouldExitOnBranch = true;
+                    loopIdexit = (*it)->getInstruction()->getLoopId();
+                    shouldExitOnBranch = true;
                 }
 
                 //remove branch instr from queue
@@ -786,12 +853,12 @@ public:
     {
         for (auto it : resrv)
         {
-            if (((!branchInstrStallQueue.empty() && it->getIssueEndTime() <= branchInstrStallQueue.front()) || (branchInstrStallQueue.empty())) && it->getInstructionType() != SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
+            if (((!branchInstrStallQueue.empty() && it->getIssueEndTime() <= branchInstrStallQueue.front().branchId) || (branchInstrStallQueue.empty())) && it->getInstructionType() != SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
             {
                 it->setStage(EXEC);
             }
 
-            if (((!branchInstrStallQueue.empty() && it->getIssueEndTime() <= branchInstrStallQueue.front()) || (branchInstrStallQueue.empty())) && it->getInstructionType() == SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
+            if (((!branchInstrStallQueue.empty() && it->getIssueEndTime() <= branchInstrStallQueue.front().branchId) || (branchInstrStallQueue.empty())) && it->getInstructionType() == SW && it->isInIssueStage() && it->getIssueEndTime() <= cycleTime)
             {
                 it->setStage(MEM);
             }
@@ -830,9 +897,9 @@ public:
         }
     }
 
-    void speculativeReservationClear()
+    void branchNotTakenReservationClear(int time)
     {
-        if (!speculativeShouldExitOnBranch || branchIdExit == -1)
+        if (!shouldExitOnBranch || branchIdExit == -1 || loopIdexit == -1)
             return;
 
         speculativeClear(add);
@@ -840,10 +907,49 @@ public:
         speculativeClear(branch);
         speculativeClear(memory);
 
-        while (!ROB.empty() && ROB.top()->getId() > branchIdExit)
+        // while (!ROB.empty() && ROB.top()->getId() > branchIdExit && (ROB.top()->getLoopId() == loopIdexit))
+        // {
+        //     ROB.top()->stage = NOTISSUED;
+        //     ROB.pop();
+        // }
+        priority_queue<Instruction *, vector<Instruction *>, compare> copyROB;
+        while (!ROB.empty())
         {
-            ROB.top()->stage = NOTISSUED;
+            if (ROB.top()->getId() > branchIdExit && (ROB.top()->getLoopId() == loopIdexit))
+            {
+                ROB.pop();
+                continue;
+            }
+            copyROB.push(ROB.top());
             ROB.pop();
+        }
+        ROB = copyROB;
+
+        int branchStallBeforeSize = branchInstrStallQueue.size();
+        deque<branchStall>::iterator it = branchInstrStallQueue.begin();
+        while (it != branchInstrStallQueue.end())
+        {
+            if ((*it).branchId > branchIdExit && (*it).loopId == loopIdexit)
+            {
+                branchInstrStallQueue.erase(it);
+            }
+            else
+            {
+                it++;
+            }
+        }
+
+        int branchStallAfterSize = branchInstrStallQueue.size();
+        if (!isSpeculative && (branchStallBeforeSize - branchStallAfterSize >= 1))
+        {
+            advanceStage(time);
+        }
+
+        //reset
+        if (!isSpeculative)
+        {
+            shouldExitOnBranch = false;
+            branchIdExit = -1;
         }
     }
 
@@ -853,15 +959,30 @@ public:
 
         while (it != resrv.end())
         {
-            if ((*it)->getId() > branchIdExit)
+            if ((*it)->getId() > branchIdExit && ((*it)->getInstruction()->getLoopId() == loopIdexit))
             {
                 (*it)->setStage(NOTISSUED);
+                string instructionId = to_string((*it)->getId());
+                clearDependency(add, instructionId);
+                clearDependency(mult, instructionId);
+                clearDependency(memory, instructionId);
+                clearDependency(branch, instructionId);
+                clearRegisterWithInstruction(instructionId);
                 resrv.erase(it);
             }
             else
             {
                 it++;
             }
+        }
+    }
+
+    void clearDependency(vector<ReservationStation *> &resrv, string instructionId)
+    {
+
+        for (auto it : resrv)
+        {
+            it->clearDependencyWithInstrId(instructionId);
         }
     }
 };
@@ -888,7 +1009,9 @@ public:
 
     void printTimingCycle()
     {
-        cout << "Issue"
+        cout << "Instruction"
+             << "\t"
+             << "Issue"
              << "\t"
              << "Exec"
              << "\t"
@@ -905,7 +1028,10 @@ public:
             if (it->issue == -1)
                 continue;
 
-            cout << (it)->issue << "\t";
+            cout << (it)->printInstruction() << "\t";
+
+            cout
+                << (it)->issue << "\t";
 
             if (it->execStart != -1 && it->execEnd != -1)
             {
@@ -947,6 +1073,20 @@ void TomsuloSimulator::execute()
     auto it = (*instructions).begin();
     do
     {
+        int nextLoop = reservationTable->getNextLoop();
+        while (it != (*instructions).end())
+        {
+            if ((*it)->getLoopId() >= nextLoop)
+            {
+                break;
+            }
+            else
+            {
+                reservationTable->setPC(((*it)->id) + 1);
+                it++;
+            }
+        }
+
         int i = 0;
         while ((i < issueCount) && (it != (*instructions).end()))
         {
@@ -969,7 +1109,7 @@ void TomsuloSimulator::execute()
         reservationTable->writeBack(time, commitCount);
         reservationTable->commit(time, commitCount);
         reservationTable->advanceStage(time);
-        reservationTable->speculativeReservationClear();
+        reservationTable->branchNotTakenReservationClear(time);
         time++;
     } while (!reservationTable->isEmpty());
 }
@@ -981,6 +1121,8 @@ vector<Instruction *> *readFile(string fileName)
     ifstream infile;
 
     vector<Instruction *> *instructions = new vector<Instruction *>();
+    vector<string> instructionLoop;
+    int loopId = 0;
 
     infile.open(fileName.c_str(), std::ifstream::in);
 
@@ -995,9 +1137,29 @@ vector<Instruction *> *readFile(string fileName)
         getline(infile, sLine);
         if (sLine.empty())
             break;
-        newInstruction = new Instruction(sLine, instructionCount);
+        newInstruction = new Instruction(sLine, instructionCount, loopId);
         instructions->push_back(newInstruction);
-        instructionCount++;
+        instructionLoop.push_back(sLine);
+
+        if (sLine.find("BNE") != string::npos)
+        {
+            instructionCount++;
+            for (int i = 1; i < 4; i++)
+            {
+                for (auto it : instructionLoop)
+                {
+                    instructions->push_back(new Instruction(it, instructionCount, loopId));
+                    instructionCount++;
+                }
+            }
+
+            loopId++;
+            instructionLoop.clear();
+        }
+        else
+        {
+            instructionCount++;
+        }
     }
 
     infile.close();
@@ -1020,16 +1182,21 @@ int main(int argc, char *argv[])
     // instrArray.push_back(new Instruction("ADD r6 r8 r2", 5));
 
     //TC2
-    // instrArray.push_back(new Instruction("LW r2 r1", 0));
-    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
-    // instrArray.push_back(new Instruction("SW r2 r1", 2));
-    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
-    // instrArray.push_back(new Instruction("BNE r2 r3", 4));
-    // instrArray.push_back(new Instruction("LW r2 r1", 5));
-    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
-    // instrArray.push_back(new Instruction("SW r2 r1", 7));
-    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
-    // instrArray.push_back(new Instruction("BNE r2 r3", 9));
+    // instrArray.push_back(new Instruction("LW r2 r1", 0, 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 1, 0));
+    // instrArray.push_back(new Instruction("SW r2 r1", 2, 0));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 3, 0));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 4, 0));
+    // instrArray.push_back(new Instruction("LW r2 r1", 5, 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 6, 0));
+    // instrArray.push_back(new Instruction("SW r2 r1", 7, 0));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 8, 0));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 9, 0));
+    // instrArray.push_back(new Instruction("LW r2 r1", 10, 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 11, 0));
+    // instrArray.push_back(new Instruction("SW r2 r1", 12, 0));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 13, 0));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 14, 0));
 
     //TomsuloSimulator tm(instrArray, 3, 3, 2, 3, 1, 2, 10, 1, 2, 2);
 
