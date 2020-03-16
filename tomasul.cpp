@@ -56,7 +56,10 @@ public:
     int dest;             // Destination register number
     int src1;             // Source register number
     int src2;             // Source register number
-    void printInstruction();
+    string printInstruction()
+    {
+        return instructionString;
+    }
     int issue;
     int execStart;
     int execEnd;
@@ -65,6 +68,7 @@ public:
     int writeCDB;
     int commit;
     int id;
+    string instructionString;
     Stage stage;
 };
 
@@ -89,6 +93,7 @@ Instruction::Instruction(void)
 Instruction::Instruction(string newInst, int id)
 {
     this->id = id;
+    instructionString = newInst;
     string buf;
     stringstream ss(newInst);
     vector<string> tokens;
@@ -496,7 +501,7 @@ public:
 
     void clearRegister(string reservationNumber)
     {
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 15; i++)
         {
             rf[i].clearDependencyValues(reservationNumber);
         }
@@ -888,7 +893,9 @@ public:
 
     void printTimingCycle()
     {
-        cout << "Issue"
+        cout << "Instruction"
+             << "\t"
+             << "Issue"
              << "\t"
              << "Exec"
              << "\t"
@@ -905,7 +912,10 @@ public:
             if (it->issue == -1)
                 continue;
 
-            cout << (it)->issue << "\t";
+            cout << (it)->printInstruction() << "\t";
+
+            cout
+                << (it)->issue << "\t";
 
             if (it->execStart != -1 && it->execEnd != -1)
             {
@@ -981,6 +991,7 @@ vector<Instruction *> *readFile(string fileName)
     ifstream infile;
 
     vector<Instruction *> *instructions = new vector<Instruction *>();
+    vector<string> instructionLoop;
 
     infile.open(fileName.c_str(), std::ifstream::in);
 
@@ -997,7 +1008,25 @@ vector<Instruction *> *readFile(string fileName)
             break;
         newInstruction = new Instruction(sLine, instructionCount);
         instructions->push_back(newInstruction);
-        instructionCount++;
+        instructionLoop.push_back(sLine);
+
+        if (sLine.find("BNE") != string::npos)
+        {
+            instructionCount++;
+            for (int i = 1; i < 4; i++)
+            {
+                for (auto it : instructionLoop)
+                {
+                    instructions->push_back(new Instruction(it, instructionCount));
+                    instructionCount++;
+                }
+            }
+            instructionLoop.clear();
+        }
+        else
+        {
+            instructionCount++;
+        }
     }
 
     infile.close();
@@ -1020,16 +1049,21 @@ int main(int argc, char *argv[])
     // instrArray.push_back(new Instruction("ADD r6 r8 r2", 5));
 
     //TC2
-    // instrArray.push_back(new Instruction("LW r2 r1", 0));
-    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 1));
-    // instrArray.push_back(new Instruction("SW r2 r1", 2));
-    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 3));
-    // instrArray.push_back(new Instruction("BNE r2 r3", 4));
-    // instrArray.push_back(new Instruction("LW r2 r1", 5));
-    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 6));
-    // instrArray.push_back(new Instruction("SW r2 r1", 7));
-    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 8));
-    // instrArray.push_back(new Instruction("BNE r2 r3", 9));
+    // instrArray.push_back(new Instruction("LW r2 r1", 0, 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 1, 0));
+    // instrArray.push_back(new Instruction("SW r2 r1", 2, 0));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 3, 0));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 4, 0));
+    // instrArray.push_back(new Instruction("LW r2 r1", 5, 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 6, 0));
+    // instrArray.push_back(new Instruction("SW r2 r1", 7, 0));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 8, 0));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 9, 0));
+    // instrArray.push_back(new Instruction("LW r2 r1", 10, 0));
+    // instrArray.push_back(new Instruction("ADD r2 r2 r8", 11, 0));
+    // instrArray.push_back(new Instruction("SW r2 r1", 12, 0));
+    // instrArray.push_back(new Instruction("ADD r1 r1 r9", 13, 0));
+    // instrArray.push_back(new Instruction("BNE r2 r3", 14, 0));
 
     //TomsuloSimulator tm(instrArray, 3, 3, 2, 3, 1, 2, 10, 1, 2, 2);
 
